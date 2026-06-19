@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MT5 Order Simulator</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', monospace; font-size: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* Top Bar */
+  #topbar { background: #161b22; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 8px; padding: 6px 12px; flex-shrink: 0; }
+  #topbar select, #topbar input, #topbar button { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+  #topbar button { cursor: pointer; transition: background 0.15s; }
+  #topbar button:hover { background: #30363d; }
+  #topbar button.active { background: #1f6feb; border-color: #388bfd; color: #fff; }
+  #topbar button.danger { background: #b91c1c; border-color: #f87171; color: #fff; }
+  .sep { width: 1px; height: 20px; background: #30363d; margin: 0 4px; }
+  #sim-status { font-weight: bold; color: #f0a500; min-width: 80px; }
+  #sim-status.running { color: #3fb950; }
+  #sim-status.stopped { color: #f85149; }
+
+  /* Main layout */
+  #main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Left panel - tools */
+  #left-panel { width: 200px; background: #161b22; border-right: 1px solid #30363d; display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
+  .panel-section { padding: 8px; border-bottom: 1px solid #30363d; }
+  .panel-title { color: #8b949e; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .order-btn { display: block; width: 100%; margin-bottom: 4px; padding: 5px 8px; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; border-radius: 4px; cursor: pointer; text-align: left; font-size: 11px; }
+  .order-btn:hover { background: #30363d; }
+  .order-btn.selected { border-color: #1f6feb; color: #58a6ff; }
+  .order-btn.oco { border-left: 3px solid #f0a500; }
+  .order-btn.oto { border-left: 3px solid #a371f7; }
+  .order-btn.market { border-left: 3px solid #3fb950; }
+  .order-btn.limit { border-left: 3px solid #58a6ff; }
+  .order-btn.stop { border-left: 3px solid #f85149; }
+  .order-btn.stoplimit { border-left: 3px solid #ff7b72; }
+
+  /* Indicator toggles */
+  .ind-toggle { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; cursor: pointer; }
+  .ind-toggle input { cursor: pointer; accent-color: #1f6feb; }
+
+  /* Grid controls */
+  #grid-size-label { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  #grid-size { width: 100%; accent-color: #1f6feb; }
+
+  /* Form fields */
+  .field-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .field-row label { color: #8b949e; }
+  .field-row input { width: 80px; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; border-radius: 3px; padding: 2px 5px; }
+
+  /* Center - Chart */
+  #center { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  #chart-container { flex: 1; position: relative; }
+  #chart { width: 100%; height: 100%; }
+  #grid-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+  #order-canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+
+  /* Bottom - Order Book */
+  #bottom-panel { height: 180px; background: #161b22; border-top: 1px solid #30363d; display: flex; flex-shrink: 0; }
+  #orderbook { flex: 1; overflow-y: auto; padding: 6px; }
+  #orderbook table { width: 100%; border-collapse: collapse; }
+  #orderbook th { color: #8b949e; font-weight: normal; padding: 2px 6px; border-bottom: 1px solid #30363d; text-align: left; position: sticky; top: 0; background: #161b22; }
+  #orderbook td { padding: 2px 6px; border-bottom: 1px solid #1c2128; }
+  .order-row-buy td:first-child { color: #3fb950; }
+  .order-row-sell td:first-child { color: #f85149; }
+  .order-row-pending td:first-child { color: #f0a500; }
+  .order-row-filled { opacity: 0.5; }
+  .order-row-cancelled { opacity: 0.35; text-decoration: line-through; }
+  .badge { padding: 1px 5px; border-radius: 3px; font-size: 10px; }
+  .badge-open { background: #1f3a1f; color: #3fb950; }
+  .badge-pending { background: #3a2a00; color: #f0a500; }
+  .badge-filled { background: #1a2a3a; color: #58a6ff; }
+  .badge-cancelled { background: #2a1a1a; color: #8b949e; }
+  .badge-triggered { background: #2a1a3a; color: #a371f7; }
+
+  /* Trade log */
+  #trade-log { width: 260px; border-left: 1px solid #30363d; padding: 6px; overflow-y: auto; }
+  #trade-log .log-title { color: #8b949e; font-size: 10px; text-transform: uppercase; margin-bottom: 4px; }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid #1c2128; font-size: 11px; }
+  .log-entry .time { color: #8b949e; }
+  .log-buy { color: #3fb950; }
+  .log-sell { color: #f85149; }
+  .log-trigger { color: #a371f7; }
+  .log-cancel { color: #8b949e; }
+
+  /* Right panel - stats */
+  #right-panel { width: 160px; background: #161b22; border-left: 1px solid #30363d; display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
+  .stat-block { padding: 8px; border-bottom: 1px solid #30363d; }
+  .stat-row { display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .stat-label { color: #8b949e; }
+  .stat-value { font-weight: bold; }
+  .stat-value.positive { color: #3fb950; }
+  .stat-value.negative { color: #f85149; }
+  .stat-value.neutral { color: #c9d1d9; }
+
+  /* Tooltip */
+  #tooltip { position: fixed; background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 6px 10px; font-size: 11px; pointer-events: none; display: none; z-index: 1000; }
+
+  /* Price line on hover */
+  #price-crosshair { position: absolute; pointer-events: none; left: 0; right: 0; border-top: 1px dashed #444; display: none; }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <strong style="color:#58a6ff">MT5 Simulator</strong>
+  <div class="sep"></div>
+  <select id="symbol-select">
+    <option value="BTCUSD">BTC/USD</option>
+    <option value="ETHUSD">ETH/USD</option>
+    <option value="EURUSD">EUR/USD</option>
+    <option value="XAUUSD">XAU/USD</option>
+  </select>
+  <select id="tf-select">
+    <option value="1">M1</option>
+    <option value="5">M5</option>
+    <option value="15">M15</option>
+    <option value="60" selected>H1</option>
+    <option value="240">H4</option>
+    <option value="1440">D1</option>
+  </select>
+  <div class="sep"></div>
+  <button id="btn-sim-start" class="active">▶ Simulation Start</button>
+  <button id="btn-sim-stop" style="display:none" class="danger">■ Stop</button>
+  <button id="btn-sim-reset">↺ Reset</button>
+  <span id="sim-status">● Bereit</span>
+  <div class="sep"></div>
+  <label style="color:#8b949e">Speed:</label>
+  <input type="range" id="sim-speed" min="1" max="10" value="5" style="width:80px;accent-color:#1f6feb">
+  <span id="sim-speed-label">5x</span>
+  <div class="sep"></div>
+  <span id="current-price" style="color:#f0a500;font-weight:bold;font-size:13px">--</span>
+  <span id="current-time" style="color:#8b949e;margin-left:8px">--</span>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+  <!-- LEFT PANEL -->
+  <div id="left-panel">
+    <div class="panel-section">
+      <div class="panel-title">Order Typ</div>
+      <button class="order-btn market selected" data-type="market" onclick="selectOrderType(this,'market')">
+        ● Market Order
+      </button>
+      <button class="order-btn limit" data-type="buy_limit" onclick="selectOrderType(this,'buy_limit')">
+        ↑ Buy Limit
+      </button>
+      <button class="order-btn limit" data-type="sell_limit" onclick="selectOrderType(this,'sell_limit')">
+        ↓ Sell Limit
+      </button>
+      <button class="order-btn stop" data-type="buy_stop" onclick="selectOrderType(this,'buy_stop')">
+        ↑ Buy Stop
+      </button>
+      <button class="order-btn stop" data-type="sell_stop" onclick="selectOrderType(this,'sell_stop')">
+        ↓ Sell Stop
+      </button>
+      <button class="order-btn stoplimit" data-type="buy_stop_limit" onclick="selectOrderType(this,'buy_stop_limit')">
+        ⤴ Buy Stop-Limit
+      </button>
+      <button class="order-btn stoplimit" data-type="sell_stop_limit" onclick="selectOrderType(this,'sell_stop_limit')">
+        ⤵ Sell Stop-Limit
+      </button>
+      <button class="order-btn oco" data-type="oco" onclick="selectOrderType(this,'oco')">
+        ⇅ OCO (Cancel)
+      </button>
+      <button class="order-btn oto" data-type="oto" onclick="selectOrderType(this,'oto')">
+        ⇉ OTO (Trigger)
+      </button>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">Order Parameter</div>
+      <div class="field-row">
+        <label>Lot Size</label>
+        <input type="number" id="lot-size" value="0.1" min="0.01" step="0.01">
+      </div>
+      <div class="field-row">
+        <label>SL (Pips)</label>
+        <input type="number" id="sl-pips" value="50" min="0">
+      </div>
+      <div class="field-row">
+        <label>TP (Pips)</label>
+        <input type="number" id="tp-pips" value="100" min="0">
+      </div>
+      <div class="field-row" id="trigger-price-row" style="display:none">
+        <label>Trigger $</label>
+        <input type="number" id="trigger-price" value="0">
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">Indikatoren</div>
+      <label class="ind-toggle">
+        <input type="checkbox" id="ind-ma20" onchange="toggleIndicator('ma20',this.checked)" checked>
+        <span style="color:#f0a500">MA 20</span>
+      </label>
+      <label class="ind-toggle">
+        <input type="checkbox" id="ind-ma50" onchange="toggleIndicator('ma50',this.checked)" checked>
+        <span style="color:#58a6ff">MA 50</span>
+      </label>
+      <label class="ind-toggle">
+        <input type="checkbox" id="ind-ma200" onchange="toggleIndicator('ma200',this.checked)">
+        <span style="color:#a371f7">MA 200</span>
+      </label>
+      <label class="ind-toggle">
+        <input type="checkbox" id="ind-bb" onchange="toggleIndicator('bb',this.checked)">
+        <span style="color:#3fb950">Bollinger Bands</span>
+      </label>
+      <label class="ind-toggle">
+        <input type="checkbox" id="ind-rsi" onchange="toggleIndicator('rsi',this.checked)">
+        <span style="color:#f85149">RSI (14)</span>
+      </label>
+      <label class="ind-toggle">
+        <input type="checkbox" id="ind-macd" onchange="toggleIndicator('macd',this.checked)">
+        <span style="color:#79c0ff">MACD</span>
+      </label>
+      <label class="ind-toggle">
+        <input type="checkbox" id="ind-vol" onchange="toggleIndicator('vol',this.checked)" checked>
+        <span style="color:#8b949e">Volumen</span>
+      </label>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">Grid</div>
+      <label class="ind-toggle">
+        <input type="checkbox" id="grid-toggle" onchange="toggleGrid(this.checked)" checked>
+        <span>Grid anzeigen</span>
+      </label>
+      <div id="grid-size-label">
+        <span style="color:#8b949e">Größe:</span>
+        <span id="grid-size-val">200</span>
+      </div>
+      <input type="range" id="grid-size" min="50" max="1000" value="200" step="50" oninput="updateGridSize(this.value)">
+      <div class="field-row" style="margin-top:6px">
+        <label>Opacity</label>
+        <input type="range" id="grid-opacity" min="0.05" max="0.5" value="0.15" step="0.05" style="width:80px;accent-color:#1f6feb" oninput="drawGrid()">
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER -->
+  <div id="center">
+    <div id="chart-container">
+      <div id="chart"></div>
+      <canvas id="grid-canvas"></canvas>
+      <canvas id="order-canvas" onclick="onChartClick(event)"></canvas>
+      <div id="price-crosshair"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div id="right-panel">
+    <div class="stat-block">
+      <div class="panel-title">Konto</div>
+      <div class="stat-row"><span class="stat-label">Balance</span><span class="stat-value neutral" id="stat-balance">$10,000</span></div>
+      <div class="stat-row"><span class="stat-label">Equity</span><span class="stat-value neutral" id="stat-equity">$10,000</span></div>
+      <div class="stat-row"><span class="stat-label">Margin</span><span class="stat-value neutral" id="stat-margin">$0</span></div>
+      <div class="stat-row"><span class="stat-label">Free Mg</span><span class="stat-value neutral" id="stat-free-margin">$10,000</span></div>
+    </div>
+    <div class="stat-block">
+      <div class="panel-title">Performance</div>
+      <div class="stat-row"><span class="stat-label">P&L offen</span><span class="stat-value neutral" id="stat-open-pl">$0</span></div>
+      <div class="stat-row"><span class="stat-label">P&L gesamt</span><span class="stat-value neutral" id="stat-total-pl">$0</span></div>
+      <div class="stat-row"><span class="stat-label">Trades</span><span class="stat-value neutral" id="stat-trades">0</span></div>
+      <div class="stat-row"><span class="stat-label">Wins</span><span class="stat-value positive" id="stat-wins">0</span></div>
+      <div class="stat-row"><span class="stat-label">Losses</span><span class="stat-value negative" id="stat-losses">0</span></div>
+    </div>
+    <div class="stat-block">
+      <div class="panel-title">Aktuelle Bar</div>
+      <div class="stat-row"><span class="stat-label">Open</span><span class="stat-value neutral" id="bar-open">--</span></div>
+      <div class="stat-row"><span class="stat-label">High</span><span class="stat-value positive" id="bar-high">--</span></div>
+      <div class="stat-row"><span class="stat-label">Low</span><span class="stat-value negative" id="bar-low">--</span></div>
+      <div class="stat-row"><span class="stat-label">Close</span><span class="stat-value neutral" id="bar-close">--</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- BOTTOM - ORDER BOOK + LOG -->
+<div id="bottom-panel">
+  <div id="orderbook">
+    <table>
+      <thead>
+        <tr>
+          <th>Typ</th><th>Preis</th><th>Lot</th><th>SL</th><th>TP</th><th>P&L</th><th>Status</th><th>Relation</th><th>Aktion</th>
+        </tr>
+      </thead>
+      <tbody id="order-table-body">
+        <tr><td colspan="9" style="color:#8b949e;text-align:center;padding:20px">Keine Orders — Klicke auf den Chart um Orders zu platzieren</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div id="trade-log">
+    <div class="log-title">Trade Log</div>
+    <div id="log-entries"></div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script src="simulator.js"></script>
+</body>
+</html>
